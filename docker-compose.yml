@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cmms_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cmms_user
+      POSTGRES_PASSWORD: cmms_password
+      POSTGRES_DB: cmms_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - cmms_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cmms_user -d cmms_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cmms_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://cmms_user:cmms_password@postgres:5432/cmms_db?schema=public
+      PORT: 3333
+      NODE_ENV: production
+      CORS_ORIGIN: http://localhost:5173
+      JWT_SECRET: ${JWT_SECRET:-troque-este-valor-em-producao}
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-troque-este-valor-tambem}
+      JWT_REFRESH_EXPIRES_IN: 7d
+      UPLOAD_DIR: uploads
+    ports:
+      - "3333:3333"
+    volumes:
+      - cmms_uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cmms_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL: http://localhost:3333/api
+    ports:
+      - "5173:80"
+
+volumes:
+  cmms_postgres_data:
+  cmms_uploads:
