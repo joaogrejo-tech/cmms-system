@@ -26,6 +26,14 @@ export function createApp() {
   app.use(express.urlencoded({ extended: true }));
   app.use(pinoHttp({ logger }));
 
+    app.get('/', (req, res) => {
+    res.json({
+      status: 'online',
+      service: 'CMMS API',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   app.use(
     rateLimit({
       windowMs: env.rateLimit.windowMs,
