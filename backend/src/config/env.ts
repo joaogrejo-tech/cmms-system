@@ -1,12 +1,15 @@
 import dotenv from 'dotenv';
+import type { SignOptions } from 'jsonwebtoken';
 
 dotenv.config();
 
 function required(name: string, fallback?: string): string {
   const value = process.env[name] ?? fallback;
+
   if (value === undefined) {
     throw new Error(`Variável de ambiente obrigatória ausente: ${name}`);
   }
+
   return value;
 }
 
@@ -16,11 +19,18 @@ export const env = {
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
 
   jwt: {
-    secret: required('JWT_SECRET', 'dev-secret-change-me'),
-    expiresIn: process.env.JWT_EXPIRES_IN ?? '15m',
-    refreshSecret: required('JWT_REFRESH_SECRET', 'dev-refresh-secret-change-me'),
-    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
-  },
+  secret: required('JWT_SECRET', 'dev-secret-change-me'),
+
+  expiresIn: (process.env.JWT_EXPIRES_IN ?? '15m') as SignOptions['expiresIn'],
+
+  refreshSecret: required(
+    'JWT_REFRESH_SECRET',
+    'dev-refresh-secret-change-me'
+  ),
+
+  refreshExpiresIn:
+    (process.env.JWT_REFRESH_EXPIRES_IN ?? '7d') as SignOptions['expiresIn'],
+},
 
   upload: {
     dir: process.env.UPLOAD_DIR ?? 'uploads',
