@@ -1,4 +1,4 @@
-import { Prisma, WorkOrderStatus, MaintenanceType } from '@prisma/client';
+import { Prisma, MaintenanceType } from '@prisma/client';
 import { prisma } from '@/config/prisma';
 import { diffInHours } from '@/shared/utils/date';
 import { DEFAULT_SLA_HOURS } from '@/shared/utils/workOrderStatusMachine';
@@ -67,7 +67,7 @@ export class DashboardService {
 
     return grouped.map((g) => ({
       label: g.assetId ? (assetMap[g.assetId] ?? 'Não encontrado') : 'Sem ativo',
-      value: Number(g._sum.totalCost ?? 0),
+      value: Number(g._sum.totalCost || 0),
     }));
   }
 
@@ -88,17 +88,18 @@ export class DashboardService {
       avgResolutionRaw,
     ] = await Promise.all([
       prisma.workOrder.count({ where: baseWhere }),
-      prisma.workOrder.count({ where: { ...baseWhere, status: WorkOrderStatus.ABERTA } }),
-      prisma.workOrder.count({ where: { ...baseWhere, status: { in: [WorkOrderStatus.EM_ANDAMENTO, WorkOrderStatus.EM_ANALISE] } } }),
-      prisma.workOrder.count({ where: { ...baseWhere, status: WorkOrderStatus.CONCLUIDA } }),
+      // Uso de strings explícitas no filtro para evitar crash se o Enum mudar e retornar undefined
+      prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['ABERTA', 'PENDENTE', 'EM_ANALISE'] } } }),
+      prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['EM_ANDAMENTO'] } } }),
+      prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] } } }),
       prisma.workOrder.count({
-        where: { ...baseWhere, status: { notIn: [WorkOrderStatus.CONCLUIDA, WorkOrderStatus.CANCELADA] }, dueAt: { lt: now } },
+        where: { ...baseWhere, status: { notIn: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA', 'CANCELADA', 'CANCELADO'] }, dueAt: { lt: now } },
       }),
       prisma.workOrder.count({ where: { ...baseWhere, priority: { in: ['ALTA', 'URGENTE'] } } }),
       prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfMonth } }, _sum: { totalCost: true } }),
       prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfYear } }, _sum: { totalCost: true } }),
       prisma.workOrder.findMany({
-        where: { ...baseWhere, status: WorkOrderStatus.CONCLUIDA, finishedAt: { not: null } },
+        where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] }, finishedAt: { not: null } },
         select: { openedAt: true, finishedAt: true },
       }),
     ]);
@@ -117,8 +118,8 @@ export class DashboardService {
       completedWorkOrders: completed,
       lateWorkOrders: late,
       highPriorityWorkOrders: highPriority,
-      costThisMonth: costThisMonth._sum.totalCost ?? 0,
-      costThisYear: costThisYear._sum.totalCost ?? 0,
+      costThisMonth: Number(costThisMonth._sum.totalCost || 0),
+      costThisYear: Number(costThisYear._sum.totalCost || 0),
       averageResolutionTimeHours: Number(avgResolutionHours.toFixed(1)),
       backlog,
     };
@@ -130,7 +131,7 @@ export class DashboardService {
       where: baseWhere,
       _count: { _all: true },
     });
-    return grouped.map((g) => ({ label: g.status, value: g._count._all }));
+    return grouped.map((g) => ({ label: String(g.status || 'Desconhecido'), value: g._count._all }));
   }
 
   private async getBySector(baseWhere: Prisma.WorkOrderWhereInput) {
@@ -144,7 +145,7 @@ export class DashboardService {
     const labelMap = Object.fromEntries(sectors.map((s) => [s.id, s.name]));
 
     return grouped
-      .map((g) => ({ label: labelMap[g.sectorId] ?? 'Não informado', value: g._count._all }))
+      .map((g) => ({ label: g.sectorId ? (labelMap[g.sectorId] ?? 'Não informado') : 'Não informado', value: g._count._all }))
       .sort((a, b) => b.value - a.value);
   }
 
@@ -156,7 +157,7 @@ export class DashboardService {
     });
 
     return grouped
-      .map((g) => ({ label: g.specialty, value: g._count._all }))
+      .map((g) => ({ label: String(g.specialty || 'Não informada'), value: g._count._all }))
       .sort((a, b) => b.value - a.value);
   }
 
@@ -190,7 +191,7 @@ export class DashboardService {
     const sectorMap = Object.fromEntries(sectors.map((s) => [s.id, s.name]));
 
     return grouped
-      .map((g) => ({ label: sectorMap[g.sectorId] ?? 'Não informado', value: Number(g._sum.totalCost ?? 0) }))
+      .map((g) => ({ label: g.sectorId ? (sectorMap[g.sectorId] ?? 'Não informado') : 'Não informado', value: Number(g._sum.totalCost || 0) }))
       .sort((a, b) => b.value - a.value);
   }
 
@@ -211,10 +212,11 @@ export class DashboardService {
     const costByMonth: Record<string, number> = Object.fromEntries(months.map((m) => [m, 0]));
 
     for (const wo of workOrders) {
+      if (!wo.openedAt) continue;
       const key = `${wo.openedAt.getFullYear()}-${String(wo.openedAt.getMonth() + 1).padStart(2, '0')}`;
       if (key in countByMonth) {
         countByMonth[key] += 1;
-        costByMonth[key] += Number(wo.totalCost);
+        costByMonth[key] += Number(wo.totalCost || 0);
       }
     }
 
@@ -230,13 +232,14 @@ export class DashboardService {
       where: baseWhere,
       _count: { _all: true },
     });
-    return grouped.map((g) => ({ label: g.maintenanceType, value: g._count._all }));
+    return grouped.map((g) => ({ label: String(g.maintenanceType || 'Não definido'), value: g._count._all }));
   }
 
   private async getHeatmap(baseWhere: Prisma.WorkOrderWhereInput) {
     const workOrders = await prisma.workOrder.findMany({ where: baseWhere, select: { openedAt: true } });
     const counts: Record<string, number> = {};
     for (const wo of workOrders) {
+      if (!wo.openedAt) continue;
       const key = wo.openedAt.toISOString().slice(0, 10);
       counts[key] = (counts[key] ?? 0) + 1;
     }
@@ -257,18 +260,12 @@ export class DashboardService {
     });
   }
 
-  /**
-   * MTTR (Mean Time To Repair): tempo médio entre o início e a conclusão de OS corretivas.
-   * MTBF (Mean Time Between Failures): tempo médio entre corretivas consecutivas do mesmo ativo.
-   * Disponibilidade: 1 - (tempo total parado / tempo total do período), aproximado pelo
-   *   somatório de horas de OS corretivas concluídas sobre o período analisado.
-   */
   private async getIndicators(baseWhere: Prisma.WorkOrderWhereInput, dateFrom: Date, dateTo: Date) {
     const correctiveCompleted = await prisma.workOrder.findMany({
       where: {
         ...baseWhere,
         maintenanceType: MaintenanceType.CORRETIVA,
-        status: WorkOrderStatus.CONCLUIDA,
+        status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] },
         finishedAt: { not: null },
       },
       select: { assetId: true, openedAt: true, startedAt: true, finishedAt: true },
@@ -306,9 +303,12 @@ export class DashboardService {
       where: baseWhere,
       select: { priority: true, slaHours: true, openedAt: true, finishedAt: true, status: true },
     });
-    const relevant = allClosedOrOpen.filter((wo) => wo.status !== 'CANCELADA');
+    
+    const relevant = allClosedOrOpen.filter((wo) => wo.status !== 'CANCELADA' && wo.status !== 'CANCELADO');
     const compliant = relevant.filter((wo) => {
-      const sla = wo.slaHours ?? DEFAULT_SLA_HOURS[wo.priority];
+      // Se não achar o SLA pela prioridade, assume 24h como padrão seguro para não dar NaN
+      const defaultSla = (wo.priority && DEFAULT_SLA_HOURS[wo.priority]) ? DEFAULT_SLA_HOURS[wo.priority] : 24;
+      const sla = wo.slaHours ?? defaultSla;
       const reference = wo.finishedAt ?? new Date();
       return diffInHours(wo.openedAt, reference) <= sla;
     });
