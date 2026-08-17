@@ -12,27 +12,26 @@ function buildDateRange(query: DashboardQueryDTO) {
 }
 
 export class DashboardService {
-  async getSummary(query: DashboardQueryDTO) {
+async getSummary(query: DashboardQueryDTO) {
     const { dateFrom, dateTo } = buildDateRange(query);
     const baseWhere: Prisma.WorkOrderWhereInput = {
       sectorId: query.sectorId,
       openedAt: { gte: dateFrom, lte: dateTo },
     };
 
-    const [cards, statusPie, bySector, bySpecialty, byResponsible, costBySector, monthlySeries, correctivePreventive, heatmap, timeline, indicators] =
-      await Promise.all([
-        this.getCards(baseWhere),
-        this.getStatusPie(baseWhere),
-        this.getBySector(baseWhere),
-        this.getBySpecialty(baseWhere),
-        this.getByResponsible(baseWhere),
-        this.getCostBySector(baseWhere),
-        this.getMonthlySeries(baseWhere, dateFrom, dateTo),
-        this.getCorrectivePreventiveDonut(baseWhere),
-        this.getHeatmap(baseWhere),
-        this.getTimeline(query.sectorId),
-        this.getIndicators(baseWhere, dateFrom, dateTo),
-      ]);
+    // 🚦 Em vez de Promise.all (tudo ao mesmo tempo), fazemos consultas sequenciais
+    // Isso impede que o limite de conexões do banco gratuito seja estourado.
+    const cards = await this.getCards(baseWhere);
+    const statusPie = await this.getStatusPie(baseWhere);
+    const bySector = await this.getBySector(baseWhere);
+    const bySpecialty = await this.getBySpecialty(baseWhere);
+    const byResponsible = await this.getByResponsible(baseWhere);
+    const costBySector = await this.getCostBySector(baseWhere);
+    const monthlySeries = await this.getMonthlySeries(baseWhere, dateFrom, dateTo);
+    const correctivePreventive = await this.getCorrectivePreventiveDonut(baseWhere);
+    const heatmap = await this.getHeatmap(baseWhere);
+    const timeline = await this.getTimeline(query.sectorId);
+    const indicators = await this.getIndicators(baseWhere, dateFrom, dateTo);
 
     return {
       cards,
@@ -51,7 +50,6 @@ export class DashboardService {
       indicators,
     };
   }
-
   async getCostByAsset() {
     const grouped = await prisma.workOrder.groupBy({
       by: ['assetId'],
@@ -71,38 +69,49 @@ export class DashboardService {
     }));
   }
 
-  private async getCards(baseWhere: Prisma.WorkOrderWhereInput) {
+ private async getCards(baseWhere: Prisma.WorkOrderWhereInput) {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfYear = new Date(now.getFullYear(), 0, 1);
 
-    const [
-      total,
-      pending,
-      inProgress,
-      completed,
-      late,
-      highPriority,
-      costThisMonth,
-      costThisYear,
-      avgResolutionRaw,
-    ] = await Promise.all([
-      prisma.workOrder.count({ where: baseWhere }),
-      // Uso de strings explícitas no filtro para evitar crash se o Enum mudar e retornar undefined
-      prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['ABERTA', 'PENDENTE', 'EM_ANALISE'] } } }),
-      prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['EM_ANDAMENTO'] } } }),
-      prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] } } }),
-      prisma.workOrder.count({
-        where: { ...baseWhere, status: { notIn: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA', 'CANCELADA', 'CANCELADO'] }, dueAt: { lt: now } },
-      }),
-      prisma.workOrder.count({ where: { ...baseWhere, priority: { in: ['ALTA', 'URGENTE'] } } }),
-      prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfMonth } }, _sum: { totalCost: true } }),
-      prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfYear } }, _sum: { totalCost: true } }),
-      prisma.workOrder.findMany({
-        where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] }, finishedAt: { not: null } },
-        select: { openedAt: true, finishedAt: true },
-      }),
-    ]);
+    // 🚦 Consultas sequenciais para poupar o banco
+    const total = await prisma.workOrder.count({ where: baseWhere });
+    const pending = await prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['ABERTA', 'PENDENTE', 'EM_ANALISE'] } } });
+    const inProgress = await prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['EM_ANDAMENTO'] } } });
+    const completed = await prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] } } });
+    const late = await prisma.workOrder.count({
+      where: { ...baseWhere, status: { notIn: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA', 'CANCELADA', 'CANCELADO'] }, dueAt: { lt: now } },
+    });
+    const highPriority = await prisma.workOrder.count({ where: { ...baseWhere, priority: { in: ['ALTA', 'URGENTE'] } } });
+    const costThisMonth = await prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfMonth } }, _sum: { totalCost: true } });
+    const costThisYear = await prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfYear } }, _sum: { totalCost: true } });
+    const avgResolutionRaw = await prisma.workOrder.findMany({
+      where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] }, finishedAt: { not: null } },
+      select: { openedAt: true, finishedAt: true },
+    });
+
+    // ... resto do código (cálculos de avgResolutionHours e backlog continuam iguais)private async getCards(baseWhere: Prisma.WorkOrderWhereInput) {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+
+    // 🚦 Consultas sequenciais para poupar o banco
+    const total = await prisma.workOrder.count({ where: baseWhere });
+    const pending = await prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['ABERTA', 'PENDENTE', 'EM_ANALISE'] } } });
+    const inProgress = await prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['EM_ANDAMENTO'] } } });
+    const completed = await prisma.workOrder.count({ where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] } } });
+    const late = await prisma.workOrder.count({
+      where: { ...baseWhere, status: { notIn: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA', 'CANCELADA', 'CANCELADO'] }, dueAt: { lt: now } },
+    });
+    const highPriority = await prisma.workOrder.count({ where: { ...baseWhere, priority: { in: ['ALTA', 'URGENTE'] } } });
+    const costThisMonth = await prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfMonth } }, _sum: { totalCost: true } });
+    const costThisYear = await prisma.workOrder.aggregate({ where: { openedAt: { gte: startOfYear } }, _sum: { totalCost: true } });
+    const avgResolutionRaw = await prisma.workOrder.findMany({
+      where: { ...baseWhere, status: { in: ['CONCLUIDA', 'CONCLUIDO', 'FINALIZADA'] }, finishedAt: { not: null } },
+      select: { openedAt: true, finishedAt: true },
+    });
+
+    // ... resto do código (cálculos de avgResolutionHours e backlog continuam iguais)
 
     const avgResolutionHours =
       avgResolutionRaw.length > 0
