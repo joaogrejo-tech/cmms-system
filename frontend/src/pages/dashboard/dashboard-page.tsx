@@ -34,16 +34,22 @@ export default function DashboardPage() {
   // Referência para o container principal que será impresso
   const printRef = useRef<HTMLDivElement>(null);
 
-  // Calcula o dateFrom e dateTo com base no mês selecionado
-  const dateParams = selectedMonth
-    ? {
-        dateFrom: new Date(`${selectedMonth}-01T00:00:00.000Z`).toISOString(),
-        // Pega o último dia do mês selecionado
-        dateTo: new Date(new Date(`${selectedMonth}-01T00:00:00.000Z`).getFullYear(), new Date(`${selectedMonth}-01T00:00:00.000Z`).getMonth() + 1, 0, 23, 59, 59, 999).toISOString(),
-      }
-    : undefined;
+  // Calcula o dateFrom e dateTo com precisão absoluta de fuso horário
+  let dateParams = undefined;
+  if (selectedMonth) {
+    const [year, month] = selectedMonth.split('-'); 
+    // Primeiro dia do mês à 00:00:00
+    const from = new Date(Number(year), Number(month) - 1, 1, 0, 0, 0);
+    // Último dia do mês às 23:59:59
+    const to = new Date(Number(year), Number(month), 0, 23, 59, 59, 999);
 
-  // Repassando os parâmetros de data para o Hook (precisaremos checar se o seu hook aceita esses params)
+    dateParams = {
+      dateFrom: from.toISOString(),
+      dateTo: to.toISOString(),
+    };
+  }
+
+  // Repassando os parâmetros de data para o Hook
   const { data, isLoading } = useDashboardSummary(dateParams);
 
   // Função para exportar o Dashboard como PDF
